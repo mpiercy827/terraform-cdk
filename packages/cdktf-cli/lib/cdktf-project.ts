@@ -1,6 +1,6 @@
 import { AbortController } from "node-abort-controller"; // polyfill until we update to node 16
 import { SynthesizedStack, SynthStack } from "./synth-stack";
-import { printAnnotations } from "./synth";
+import { printAnnotations, printWarningsForDeprecatedFlags } from "./synth";
 import { CdktfStack, StackApprovalUpdate, StackUpdate } from "./cdktf-stack";
 import { Errors } from "./errors";
 import { TerraformPlan } from "./models/terraform";
@@ -475,6 +475,9 @@ export class CdktfProject {
     this.onUpdate({
       type: "synthesizing",
     });
+
+    printWarningsForDeprecatedFlags();
+
     const stacks = await SynthStack.synth(
       this.abortSignal,
       this.synthCommand,
