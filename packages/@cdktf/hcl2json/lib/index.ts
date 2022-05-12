@@ -13,6 +13,7 @@ import { gunzipSync } from "zlib";
 
 interface GoBridge {
   parse: (filename: string, hcl: string) => Promise<string>;
+  getReferencesInExpression: (filename: string, hcl: string) => Promise<string>;
 }
 
 // eslint-disable-next-line @typescript-eslint/ban-types
@@ -117,4 +118,108 @@ export async function convertFiles(
     await parse("hcl2json.tf", tfFileContents),
     ...tfJSONFileContents
   );
+}
+
+type CodeMarker = {
+  Byte: number;
+  Line: number;
+  Column: number;
+};
+type Range = {
+  End: CodeMarker;
+  Start: CodeMarker;
+};
+type TerraformTraversalPart = {
+  Name: string;
+  SrcRange: Range;
+};
+// Reference to a variable / module / resource
+type TerraformTraversal = { Traversal: TerraformTraversalPart[] };
+type TerraformFunctionCall = {
+  Args: TerraformObject[];
+  Name: string;
+  ExpandFinal: boolean;
+  NameRange: Range;
+  OpenParenRange: Range;
+  CloseParenRange: Range;
+};
+type TerraformLiteral = {
+  SrcRange: Range;
+  Val: unknown; // No value is passed down, we ignore them
+};
+type TerraformEmbeddedExpression = {
+  Wrapped: TerraformObject;
+};
+type TerraformExpression = {
+  Parts: TerraformObject[];
+};
+type TerraformObject =
+  | TerraformEmbeddedExpression
+  | TerraformExpression
+  | TerraformFunctionCall
+  | TerraformLiteral
+  | TerraformTraversal;
+
+type GoExpressionParseResult = null | TerraformObject;
+
+type Reference = { value: string; startPosition: number; endPosition: number };
+
+function traversalToReference(traversal: TerraformTraversal): Reference {
+  if (
+    traversal.Traversal.find(
+      (part) => part.SrcRange.Start.Line !== 0 || part.SrcRange.End.Line !== 0
+    )
+  ) {
+    throw new Error(`Parsed references are expected to be a single line`);
+  }
+
+  return {
+    value: traversal.Traversal.map((part) => part.Name).join("."),
+    startPosition: traversal.Traversal[0].SrcRange.Start.Column,
+    endPosition:
+      traversal.Traversal[traversal.Traversal.length - 1].SrcRange.End.Column,
+  };
+}
+
+function findAllReferencesInAst(entry: TerraformObject): Reference[] {
+  if ("Traversal" in entry) {
+    return [traversalToReference(entry)];
+  }
+
+  if ("Parts" in entry) {
+    return entry.Parts.reduce(
+      (carry, part) => [...carry, ...findAllReferencesInAst(part)],
+      [] as Reference[]
+    );
+  }
+
+  if ("Wrapped" in entry) {
+    return findAllReferencesInAst(entry.Wrapped);
+  }
+
+  if ("Args" in entry) {
+    return entry.Args.reduce(
+      (carry, arg) => [...carry, ...findAllReferencesInAst(arg)],
+      [] as Reference[]
+    );
+  }
+
+  return [];
+}
+
+export async function getReferencesInExpression(
+  filename: string,
+  expression: string
+): Promise<Reference[]> {
+  const res = await wasm.getReferencesInExpression(
+    filename,
+    JSON.stringify(expression)
+  );
+  const ast = JSON.parse(res) as GoExpressionParseResult;
+
+  if (!ast) {
+    return [];
+  }
+
+  return findAllReferencesInAst(ast);
 }
