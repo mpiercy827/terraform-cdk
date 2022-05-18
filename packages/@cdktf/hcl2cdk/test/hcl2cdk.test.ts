@@ -102,7 +102,7 @@ let projectDir: string;
 describe("convert", () => {
   beforeAll(async () => {
     // Get all the provider schemas
-    const { providerSchema } = await readSchema(
+    const schemaPromise = readSchema(
       providers.map((spec) =>
         ConstructsMakerProviderTarget.from(
           new config.TerraformProviderConstraint(spec),
@@ -110,8 +110,6 @@ describe("convert", () => {
         )
       )
     );
-
-    cachedProviderSchema = providerSchema;
 
     // Initialize a new project
     projectDir = fs.mkdtempSync("cdktf-convert-test");
@@ -134,6 +132,8 @@ describe("convert", () => {
       )
     );
     execSync(`cd ${projectDir} && ${cdktfBin} get`);
+    const { providerSchema } = await schemaPromise;
+    cachedProviderSchema = providerSchema;
   }, 500_000);
 
   afterAll(() => {
@@ -1338,7 +1338,7 @@ describe("convert", () => {
   );
 
   const targetLanguages = ["typescript", "python", "csharp", "java"];
-  describe("Cross-Language Support", () => {
+  describe.skip("Cross-Language Support", () => {
     it.each(targetLanguages)("supports %s", (language) => {
       const hcl = `
       resource "aws_kms_key" "examplekms" {

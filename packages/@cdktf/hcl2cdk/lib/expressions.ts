@@ -3,6 +3,7 @@ import reservedWords from "reserved-words";
 import { camelCase, pascalCase } from "./utils";
 import { TerraformResourceBlock, Scope } from "./types";
 import { getResourceNamespace } from "@cdktf/provider-generator";
+import { getReferencesInExpression } from "@cdktf/hcl2json";
 
 export type Reference = {
   start: number;
@@ -12,95 +13,37 @@ export type Reference = {
   isVariable?: boolean;
 };
 
-const PROPERTY_ACCESS_REGEX = /\[.*\]/;
 const DOLLAR_REGEX = /\$/g;
 
-export function extractReferencesFromExpression(
+export async function extractReferencesFromExpression(
   input: string,
   nodeIds: readonly string[],
   scopedIds: readonly string[] = [] // dynamics introduce new scoped variables that are not the globally accessible ids
-): Reference[] {
-  const isDoubleParanthesis = input.startsWith("${{");
-  if (!input.startsWith("${")) {
-    return [];
-  }
-
-  const start = isDoubleParanthesis ? 3 : 2;
-  const end = isDoubleParanthesis ? input.length - 2 : input.length - 1;
-  let expressionString = input.substring(start, end);
-
-  if (
-    expressionString.includes("for") &&
-    expressionString.includes("in") &&
-    expressionString.includes(":")
-  ) {
-    // for name, user in var.users : user.role => name...
-    // We just want the var.users part (that could be an expression)
-    expressionString = expressionString.substring(
-      expressionString.indexOf("in") + 2,
-      expressionString.indexOf(":")
-    );
-  }
-  const lines = expressionString
-    .split("\n")
-    .map((line) => {
-      const commentStart = line.indexOf("#");
-      const lineWithoutComment =
-        commentStart !== -1 ? line.substring(0, commentStart - 1) : line;
-
-      return lineWithoutComment.trim();
-    })
-    .filter((line) => line !== "");
-
-  const delimiters = [
-    "(",
-    ",",
-    ")",
-    ".*",
-    PROPERTY_ACCESS_REGEX,
-    " ",
-    "!",
-    "*",
-    "/",
-    "%",
-    ">",
-    "<",
-    "=",
-    "&&",
-    "||",
-    "?",
-    // There can be nested terraform expression strings
-    "${",
-    "}",
-  ];
-
-  let possibleVariableSpots = lines;
-
-  delimiters.forEach((delimiter) => {
-    possibleVariableSpots = possibleVariableSpots.reduce(
-      (carry, str) => [...carry, ...str.split(delimiter)],
-      [] as string[]
-    );
-  });
+): Promise<Reference[]> {
+  const possibleVariableSpots = await getReferencesInExpression(
+    "main.tf",
+    input
+  );
 
   return possibleVariableSpots.reduce((carry, spot) => {
+    const { value, startPosition, endPosition } = spot;
     // no reference
     if (
-      !spot.includes(".") || // just a literal
-      spot.startsWith(".") || // dangling property access
-      spot.endsWith("...") || // spread (likely in for loop)
-      spot.startsWith("count.") || // count variable
-      spot.startsWith("each.") || // each variable
+      !value.includes(".") || // just a literal
+      value.startsWith(".") || // dangling property access
+      value.endsWith("...") || // spread (likely in for loop)
+      value.startsWith("count.") || // count variable
+      value.startsWith("each.") || // each variable
       // https://www.terraform.io/docs/language/expressions/references.html#filesystem-and-workspace-info
-      spot.startsWith("path.module") ||
-      spot.startsWith("path.root") ||
-      spot.startsWith("path.cwd") ||
-      spot.startsWith("terraform.workspace")
+      value.startsWith("path.module") ||
+      value.startsWith("path.root") ||
+      value.startsWith("path.cwd") ||
+      value.startsWith("terraform.workspace")
     ) {
       return carry;
     }
 
-    const referenceParts = spot.split(".");
+    const referenceParts = value.split(".");
 
     const corespondingNodeId = [...nodeIds, ...scopedIds].find((id) => {
       const parts = id.split(".");
@@ -118,7 +61,7 @@ export function extractReferencesFromExpression(
       // This is most likely a false positive, so we just ignore it
       // We include the log below to help debugging
       console.error(
-        `Found a reference that is unknown: ${input} has reference "${spot}". The id was not found in ${JSON.stringify(
+        `Found a reference that is unknown: ${input} has reference "${value}". The id was not found in ${JSON.stringify(
           nodeIds
         )} with temporary values ${JSON.stringify(scopedIds)}.
         Please leave a comment at https://cdk.tf/bugs/convert-expressions if you run into this issue.`
@@ -130,7 +73,7 @@ export function extractReferencesFromExpression(
       return carry;
     }
 
-    const spotParts = spot.split(".");
+    const spotParts = value.split(".");
     let isThereANumericAccessor = false;
     const referenceSpotParts = spotParts.filter((part) => {
       if (!Number.isNaN(parseInt(part, 10))) {
@@ -142,29 +85,23 @@ export function extractReferencesFromExpression(
     });
     const fullReference = isThereANumericAccessor
       ? referenceSpotParts.slice(0, 2).join(".")
-      : spot;
+      : value;
 
-    // we know we are at closer to the end than the last reference we found
-    // this helps us find duplicate referencees
-    const position = carry.length ? carry[carry.length - 1].end : 0;
-    const start = input.indexOf(fullReference, position);
-    const end = start + fullReference.length;
-
-    const isVariable = spot.startsWith("var.");
+    const isVariable = value.startsWith("var.");
     const useFqn =
       // Can not use FQN on vars
       !isVariable &&
       // Can not use FQN on locals
-      !spot.startsWith("local.") &&
+      !value.startsWith("local.") &&
       // If the following character is
-      (input.substr(end + 1, 1) === "*" || // a * (splat) we need to use the FQN
-        input.substr(end, 1) === "[" || // a property access
+      (input.substr(endPosition + 1, 1) === "*" || // a * (splat) we need to use the FQN
+        input.substr(endPosition, 1) === "[" || // a property access
         isThereANumericAccessor || // a numeric access
         fullReference.split(".").length < 3);
 
     const ref: Reference = {
-      start,
-      end,
+      start: startPosition,
+      end: endPosition,
       referencee: {
         id: corespondingNodeId,
         full: fullReference,
@@ -412,12 +349,12 @@ export const extractDynamicBlocks = (
   }, [] as DynamicBlock[]);
 };
 
-export function findUsedReferences(
+export async function findUsedReferences(
   nodeIds: string[],
   item: TerraformResourceBlock
-): Reference[] {
+): Promise<Reference[]> {
   if (typeof item === "string") {
-    return extractReferencesFromExpression(item, nodeIds, []);
+    return await extractReferencesFromExpression(item, nodeIds, []);
   }
 
   if (typeof item !== "object" || item === null || item === undefined) {
@@ -425,22 +362,26 @@ export function findUsedReferences(
   }
 
   if (Array.isArray(item)) {
-    return item.reduce(
-      (carry, i) => [...carry, ...findUsedReferences(nodeIds, i)],
-      []
-    );
+    return (
+      await Promise.all(item.map((i) => findUsedReferences(nodeIds, i), []))
+    ).reduce((carry, i) => [...carry, ...i], []);
   }
 
   if (item && "dynamic" in item) {
     const dyn = (item as any)["dynamic"];
     const { for_each, ...others } = dyn;
     const dynamicRef = Object.keys(others)[0];
-    return findUsedReferences([...nodeIds, dynamicRef], dyn);
+    return await findUsedReferences([...nodeIds, dynamicRef], dyn);
   }
-  return Object.values(item as Record<string, any>).reduce(
-    (carry, i) => [...carry, ...findUsedReferences(nodeIds, i)],
-    []
-  );
+
+  return (
+    await Promise.all(
+      Object.values(item as Record<string, any>).map(
+        (i) => findUsedReferences(nodeIds, i),
+        []
+      )
+    )
+  ).reduce((carry, i) => [...carry, ...i], []);
 }
 
 // This only guesses if the type of an expression is list, it should be replaced by something that understands
