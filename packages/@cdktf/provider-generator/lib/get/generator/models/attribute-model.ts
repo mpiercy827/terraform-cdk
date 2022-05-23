@@ -1,4 +1,5 @@
 import { AttributeTypeModel } from "./attribute-type-model";
+import { logger } from "../../../config";
 
 export type GetterType =
   | { _type: "plain" }
@@ -151,11 +152,11 @@ export class AttributeModel {
     if (type.isAnyMap) {
       return `any`;
     }
-    if (process.env.DEBUG) {
-      console.error(
-        `The attribute ${JSON.stringify(this)} isn't implemented yet`
-      );
-    }
+
+    logger.debug(
+      `The attribute isn't implemented yet: ${JSON.stringify(this)}`
+    );
+
     return `any`;
   }
 
@@ -169,7 +170,7 @@ export class AttributeModel {
   }
 
   public get isStored(): boolean {
-    return this.isAssignable && !this.isConfigIgnored;
+    return this.isAssignable;
   }
 
   public get setterType(): SetterType {
@@ -214,14 +215,6 @@ export class AttributeModel {
     return this._description
       ?.replace(/(\*\/)/gi, `*\\/`)
       .replace(/'''/gi, "```");
-  }
-
-  public get isConfigIgnored(): boolean {
-    if (this.isAssignable && !this.computed) {
-      return false;
-    }
-    const ignoreList = ["id"];
-    return ignoreList.includes(this.name);
   }
 
   public getReferencedTypes(isConfigStruct: boolean): string[] | undefined {
