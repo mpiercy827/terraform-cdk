@@ -47,44 +47,44 @@ const createTestCase =
         expect(all).toMatchSnapshot();
       });
 
-      if (shouldSynth === Synth.yes) {
-        it("plan", async () => {
-          const filename = name.replace(/\s/g, "-");
-          const { imports, code } = await result;
-          // Have a before all somewhere above bootstrap a TS project
-          // __dirname should be replaceed by the bootstrapped directory
-          const pathToThisProjectsFile = path.join(
-            projectDir,
-            filename + ".ts"
-          );
-          const fileContent = `
-        import { Construct } from "constructs";
-        import { App, TerraformStack } from "cdktf";
-        ${imports}
-        
-        class MyStack extends TerraformStack {
-          constructor(scope: Construct, name: string) {
-            super(scope, name);
-        
-            ${code}
-            
-          }
-        }
-        
-        const app = new App();
-        new MyStack(app, "${filename}");
-        app.synth();
-        `;
-          fs.writeFileSync(pathToThisProjectsFile, fileContent, "utf8");
+      // if (shouldSynth === Synth.yes) {
+      //   it("plan", async () => {
+      //     const filename = name.replace(/\s/g, "-");
+      //     const { imports, code } = await result;
+      //     // Have a before all somewhere above bootstrap a TS project
+      //     // __dirname should be replaceed by the bootstrapped directory
+      //     const pathToThisProjectsFile = path.join(
+      //       projectDir,
+      //       filename + ".ts"
+      //     );
+      //     const fileContent = `
+      //   import { Construct } from "constructs";
+      //   import { App, TerraformStack } from "cdktf";
+      //   ${imports}
 
-          const stdout = execSync(
-            `cd ${projectDir} && ${cdktfBin} synth -a 'npx ts-node ${filename}.ts' -o ./${filename}-output`
-          );
-          expect(stdout.toString()).toEqual(
-            expect.stringContaining(`Generated Terraform code for the stacks`)
-          );
-        });
-      }
+      //   class MyStack extends TerraformStack {
+      //     constructor(scope: Construct, name: string) {
+      //       super(scope, name);
+
+      //       ${code}
+
+      //     }
+      //   }
+
+      //   const app = new App();
+      //   new MyStack(app, "${filename}");
+      //   app.synth();
+      //   `;
+      //     fs.writeFileSync(pathToThisProjectsFile, fileContent, "utf8");
+
+      //     const stdout = execSync(
+      //       `cd ${projectDir} && ${cdktfBin} synth -a 'npx ts-node ${filename}.ts' -o ./${filename}-output`
+      //     );
+      //     expect(stdout.toString()).toEqual(
+      //       expect.stringContaining(`Generated Terraform code for the stacks`)
+      //     );
+      //   });
+      // }
 
       if ([Synth.needsAFix_BooleanAsIResolvable].includes(shouldSynth)) {
         it.todo("plans");

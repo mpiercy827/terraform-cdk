@@ -5,7 +5,7 @@ import { DirectedGraph } from "graphology";
 import prettier from "prettier";
 
 import { TerraformResourceBlock, Scope } from "./types";
-import { camelCase, pascalCase, uniqueId } from "./utils";
+import { camelCase, logger, pascalCase, uniqueId } from "./utils";
 import {
   Resource,
   TerraformConfig,
@@ -615,7 +615,12 @@ export const moduleImports = (modules: Record<string, Module> | undefined) => {
 };
 
 export async function gen(statements: t.Statement[]) {
-  return prettier.format(generate(t.program(statements) as any).code, {
+  logger.debug(`Generating code for ${JSON.stringify(statements, null, 2)}`);
+  const code = prettier.format(generate(t.program(statements) as any).code, {
     parser: "babel",
   });
+
+  logger.debug(`Generated code:\n${code}`);
+
+  return code;
 }

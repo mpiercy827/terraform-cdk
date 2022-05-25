@@ -32,13 +32,17 @@ import {
   resourceStats,
 } from "./iteration";
 import { getProviderRequirements } from "./provider";
+import { logger } from "./utils";
+export { setLogger } from "./utils";
 
 export async function getParsedHcl(hcl: string) {
+  logger.debug(`Parsing HCL: ${hcl}`);
   // Get the JSON representation of the HCL
   let json: Record<string, unknown>;
   try {
     json = await parse("terraform.tf", hcl);
   } catch (err) {
+    logger.error(`Failed to parse HCL: ${err}`);
     throw new Error(
       `Error: Could not parse HCL, this means either that the HCL passed is invalid or that you found a bug. If the HCL seems valid, please file a bug under https://cdk.tf/bugs/new/convert`
     );
@@ -58,6 +62,7 @@ ${JSON.stringify((err as z.ZodError).errors)}`);
 }
 
 export async function parseProviderRequirements(hcl: string) {
+  logger.debug("Parsing provider requirements");
   const plan = await getParsedHcl(hcl);
   return getProviderRequirements(plan);
 }
@@ -66,7 +71,10 @@ export async function convertToTypescript(
   hcl: string,
   providerSchema: ProviderSchema
 ) {
+  logger.debug("Converting to typescript");
   const plan = await getParsedHcl(hcl);
+
+  logger.debug(`Parsed HCL: ${JSON.stringify(plan, null, 2)}`);
 
   // Each key in the scope needs to be unique, therefore we save them in a set
   // Each variable needs to be unique as well, we save them in a record so we can identify if two variables are the same
@@ -103,9 +111,10 @@ export async function convertToTypescript(
   };
 
   // Add all nodes to the dependency graph so we can detect if an edge is added for an unknown link
-  Object.entries(nodeMap).forEach(([key, value]) =>
-    graph.addNode(key, { code: value })
-  );
+  Object.entries(nodeMap).forEach(([key, value]) => {
+    logger.debug(`Adding node '${key}' to graph`);
+    graph.addNode(key, { code: value });
+  });
 
   // Finding references becomes easier of the to be referenced ids are already known
   const nodeIds = Object.keys(nodeMap);
@@ -123,6 +132,8 @@ export async function convertToTypescript(
             These nodes exist: ${graph.nodes().join("\n")}`
           );
         }
+
+        logger.debug(`Adding edge from ${ref.referencee.id} to ${id}`);
         graph.addDirectedEdge(ref.referencee.id, id, { ref });
       }
     });
@@ -176,6 +187,8 @@ export async function convertToTypescript(
     }).map((addEdgesToGraph) => addEdgesToGraph(graph))
   );
 
+  logger.debug(`Graph: ${JSON.stringify(graph, null, 2)}`);
+  logger.debug(`Starting to assemble the typescript code`);
   // We traverse the dependency graph to get the unordered JSON nodes into an ordered array
   // where no node is referenced before it's defined
   // As we check that the nodes on both ends of an edge exist we can be sure
@@ -208,9 +221,20 @@ export async function convertToTypescript(
     );
 
     nodeExpressions.forEach((statementList) =>
-      statementList.forEach((item) => expressions.push(item))
+      statementList.forEach((item) => {
+        logger.debug(
+          `Adding ${JSON.stringify(
+            item,
+            null,
+            2
+          )} to the list of expressions after visiting ${nodesVisitedThisIteration} nodes`
+        );
+        expressions.push(item);
+      })
     );
   } while (nodesToVisit.length > 0 && nodesVisitedThisIteration != 0);
+
+  logger.debug(`Unvisited nodes: ${nodesToVisit.join(", ")}`);
 
   const backendExpressions = (
     await Promise.all(
@@ -219,6 +243,14 @@ export async function convertToTypescript(
       ) || [Promise.resolve([])]
     )
   ).reduce((carry, item) => [...carry, ...item], []);
+
+  logger.debug(
+    `Using these backend expressions: ${JSON.stringify(
+      backendExpressions,
+      null,
+      2
+    )}`
+  );
 
   // We collect all module sources
   const moduleRequirements = [
@@ -238,6 +270,10 @@ export async function convertToTypescript(
       ) || []
     ),
   ];
+
+  logger.debug(
+    `Found these modules: ${JSON.stringify(moduleRequirements, null, 2)}`
+  );
 
   // Variables, Outputs, and Backends are defined in the CDKTF project so we need to import from it
   // If none are used we don't want to leave a stray import
@@ -264,6 +300,13 @@ You can read more about this at https://cdk.tf/variables`
   }
 
   const providerRequirements = getProviderRequirements(plan);
+  logger.debug(
+    `Found these provider requirements: ${JSON.stringify(
+      providerRequirements,
+      null,
+      2
+    )}`
+  );
 
   const providers = providerImports(Object.keys(providerRequirements));
   if (providers.length > 0) {
@@ -275,12 +318,19 @@ See https://cdk.tf/provider-generation for more details.`
     );
   }
 
+  logger.debug(`Using these providers: ${JSON.stringify(providers, null, 2)}`);
+
   // We add a comment if there are providers with missing schema information
   const providersLackingSchema = Object.keys(providerRequirements).filter(
     (providerName) =>
       !Object.keys(providerSchema.provider_schemas || {}).some((schemaName) =>
         schemaName.endsWith(providerName)
       )
+  );
+  logger.debug(
+    `${
+      providersLackingSchema.length
+    } providers lack schema information: ${providersLackingSchema.join(", ")}`
   );
   if (providersLackingSchema.length > 0) {
     expressions[0] = t.addComment(
